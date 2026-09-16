@@ -3,7 +3,7 @@ module github.com/TAbelhaDev/tabelharecap
 go 1.26.1
 
 require (
-	github.com/TAbelhaDev/tabelhascaff v0.0.0-00010101000000-000000000000
+	github.com/TAbelhaDev/tabelhascaff v0.7.1
 	github.com/TAbelhaDev/tabelhatuiui v0.5.0
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
@@ -42,5 +42,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/TAbelhaDev/tabelhascaff => /home/ianptkcs/codigo/tabelhadev/tabelhascaff
