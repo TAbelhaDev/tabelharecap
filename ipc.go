@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -56,6 +57,8 @@ func runIPC(args []string) int {
 	switch parsed.Method {
 	case "item.add":
 		return ipcItemAdd(store, parsed.Filters)
+	case "item.add-batch":
+		return ipcItemAddBatch(store, parsed.Filters)
 	case "item.list":
 		return ipcItemList(store, parsed.Filters)
 	case "item.seen":
@@ -83,6 +86,38 @@ func ipcItemAdd(store *Store, filters map[string]string) int {
 		return 1
 	}
 	return ipc.WriteJSON(itemToJSON(item))
+}
+
+// ipcItemAddBatch registers multiple novidades at once. Filters: source=
+// (obrigatório), items= (JSON array of {title, body, link}). Idempotent:
+// (source, title) pairs that already exist are silently skipped.
+func ipcItemAddBatch(store *Store, filters map[string]string) int {
+	source := filters["source"]
+	if source == "" {
+		fmt.Fprintln(os.Stderr, "erro: filtro source= é obrigatório")
+		return 1
+	}
+	raw := filters["items"]
+	if raw == "" {
+		fmt.Fprintln(os.Stderr, "erro: filtro items= é obrigatório")
+		return 1
+	}
+	var items []batchItem
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		fmt.Fprintf(os.Stderr, "erro ao interpretar items=: %v\n", err)
+		return 1
+	}
+
+	result, err := store.addBatch(source, items)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "erro:", err)
+		return 1
+	}
+	out := make([]itemJSON, 0, len(result))
+	for _, it := range result {
+		out = append(out, itemToJSON(it))
+	}
+	return ipc.WriteJSON(out)
 }
 
 // ipcItemList lists items, newest first. Filters: unseen=true (opcional),

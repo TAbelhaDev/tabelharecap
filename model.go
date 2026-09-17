@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/TAbelhaDev/tabelhatuiui"
+	"github.com/TAbelhaDev/tabelhatuiui/markdown"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,8 +16,31 @@ import (
 const (
 	headerLines = 1
 	footerLines = 1
-	boxOverhead = 2 + 1 // border + title
-	listLimit   = 500   // sane cap for the TUI feed; item.list --json has no such cap
+
+	panelGap        = 1
+	listBoxOverhead = 2 + 1 // border + title
+	metaBoxOverhead = 2 + 1
+	descBoxOverhead = 2 + 1
+	minListRows     = 3
+	minMetaLines    = 4
+	minDescLines    = 4
+	minListWidth    = 20
+	minRightWidth   = 40
+	// metaFixedLines is the default metadata panel content budget (fonte,
+	// quando, status — link is conditional).
+	metaFixedLines = 3
+
+	listLimit = 500
+)
+
+// panelFocus selects which of the two interactive panels — the feed list,
+// or the description panel — currently receives j/k. The metadata panel
+// (top-right) is display-only, never a focus target.
+type panelFocus int
+
+const (
+	focusList panelFocus = iota
+	focusDesc
 )
 
 // appModel is tarecap's single view: a chronological feed of items reported
@@ -30,11 +55,21 @@ type appModel struct {
 	unseenOnly bool
 	sourceIdx  int // 0 = "todas as fontes", 1..len(sources) = sources[i-1]
 
-	tbl table.Model
+	tbl    table.Model
+	focus  panelFocus
+	descVP *markdown.Panel
 
 	width  int
 	height int
 	status string
+
+	// 3-panel layout budget, recomputed by layout() on every resize.
+	threePanel      bool
+	listInnerWidth  int
+	rightInnerWidth int
+	listRowsHeight  int
+	metaLines       int
+	descMaxLines    int
 
 	helpModal     *tuiui.HelpModal
 	settingsModal *tuiui.SettingsModal
@@ -44,6 +79,7 @@ func newModel() appModel {
 	_ = reg.Load()
 
 	m := appModel{
+		descVP: markdown.NewPanel(),
 		helpModal: tuiui.NewHelpModal(tuiui.HelpSection{
 			Title:      "Atalhos",
 			BindingsFn: reg.Bindings,
@@ -122,6 +158,9 @@ func (m *appModel) reload() {
 	m.items = items
 	m.refreshTable()
 	m.setStatus()
+	if m.descVP != nil {
+		m.descVP.Viewport().Reset()
+	}
 }
 
 func (m *appModel) setStatus() {
@@ -142,6 +181,9 @@ func (m *appModel) setStatus() {
 	m.status = fmt.Sprintf("%d novidades não vistas · %s · %s", unseen, scope, filter)
 }
 
+// refreshTable rebuilds the table rows from m.items. Always produces
+// 4-cell rows (marker, fonte, title, quando) so both 3-panel mode
+// (3 columns, 4th cell ignored) and narrow fallback (4 columns) work.
 func (m *appModel) refreshTable() {
 	rows := make([]table.Row, len(m.items))
 	for i, it := range m.items {
@@ -184,20 +226,104 @@ func humanizeAgo(t time.Time) string {
 	}
 }
 
+// layout recomputes the list/metadata/description panel widths and heights
+// so the whole 3-panel view always fits exactly within m.height — mirrors
+// taglue/tui.go's layout(): fixed line budgets per panel instead of
+// letting lipgloss stretch content past what fits.
 func (m *appModel) layout() {
 	if m.width == 0 || m.height == 0 {
 		return
 	}
-	// -4: Panel's border (2) + its own Padding(0,1) (2) — the exact off-by-4
-	// tabelharadar's layout comment already documents for the same box.
-	innerW := m.width - 4
-	if innerW < 20 {
-		innerW = 20
+
+	// Check if terminal is wide enough for 3-panel mode.
+	totalRowWidth := m.width - panelGap
+	minRow := (minListWidth + 4) + (minRightWidth + 4)
+	m.threePanel = totalRowWidth >= minRow
+
+	if !m.threePanel {
+		// Narrow fallback: single full-width table, same as before.
+		innerW := m.width - 4
+		if innerW < 20 {
+			innerW = 20
+		}
+		markerW, sourceW, ageW := 1, 18, 12
+		titleW := innerW - markerW - sourceW - ageW - 4*2
+		if titleW < 10 {
+			titleW = 10
+		}
+		m.tbl.SetColumns([]table.Column{
+			{Title: "", Width: markerW},
+			{Title: "Fonte", Width: sourceW},
+			{Title: "Novidade", Width: titleW},
+			{Title: "Quando", Width: ageW},
+		})
+		m.tbl.SetWidth(innerW)
+		bodyHeight := m.height - headerLines - footerLines - listBoxOverhead
+		if bodyHeight < 3 {
+			bodyHeight = 3
+		}
+		m.tbl.SetHeight(bodyHeight)
+		m.refreshTable()
+		return
 	}
-	// marker(1) + source(18) + age(12), the rest goes to title. Each column
-	// carries bubbles/table's own Padding(0,1) on top of these widths.
-	markerW, sourceW, ageW := 1, 18, 12
-	titleW := innerW - markerW - sourceW - ageW - 4*2 // 4 columns' worth of padding
+
+	// 3-panel mode: left list + right meta/desc (taglue layout).
+	listBoxWidth := totalRowWidth / 3
+	rightBoxWidth := totalRowWidth - listBoxWidth
+
+	m.listInnerWidth = listBoxWidth - 4
+	if m.listInnerWidth < minListWidth {
+		m.listInnerWidth = minListWidth
+	}
+	m.rightInnerWidth = rightBoxWidth - 4
+	if m.rightInnerWidth < minRightWidth {
+		m.rightInnerWidth = minRightWidth
+	}
+
+	bodyHeight := m.height - headerLines - footerLines
+	minBody := metaBoxOverhead + minMetaLines + descBoxOverhead + minDescLines
+	if minListBody := listBoxOverhead + minListRows; minListBody > minBody {
+		minBody = minListBody
+	}
+	if bodyHeight < minBody {
+		bodyHeight = minBody
+	}
+
+	// Dynamic meta sizing: use the selected item's actual content length,
+	// clamped between minMetaLines and (bodyHeight - minDescLines).
+	metaContentLines := metaFixedLines
+	item := m.current()
+	if item != nil {
+		metaContentLines = len(m.computeMetaLines())
+	}
+	metaBoxHeight := metaBoxOverhead + metaContentLines
+	if maxMeta := bodyHeight - (descBoxOverhead + minDescLines); metaBoxHeight > maxMeta {
+		metaBoxHeight = maxMeta
+	}
+	if metaBoxHeight < metaBoxOverhead+minMetaLines {
+		metaBoxHeight = metaBoxOverhead + minMetaLines
+	}
+	descBoxHeight := bodyHeight - metaBoxHeight
+	if descBoxHeight < descBoxOverhead+minDescLines {
+		descBoxHeight = descBoxOverhead + minDescLines
+	}
+
+	m.metaLines = metaBoxHeight - metaBoxOverhead
+	m.descMaxLines = descBoxHeight - descBoxOverhead
+	m.descVP.Viewport().SetHeight(m.descMaxLines)
+
+	// The list panel spans both right-column boxes stacked together, so its
+	// row budget must match their combined (post-clamp) height exactly or
+	// the borders won't line up at the bottom.
+	m.listRowsHeight = (metaBoxHeight + descBoxHeight) - listBoxOverhead
+	if m.listRowsHeight < minListRows {
+		m.listRowsHeight = minListRows
+	}
+
+	// Set table columns and size for 3-panel mode (4 columns always;
+	// Quando has width 0 so it's skipped — avoids row/cell count mismatch).
+	markerW, sourceW, ageW := 1, 18, 0
+	titleW := m.listInnerWidth - markerW - sourceW - 3*2 // 3 visible columns' padding
 	if titleW < 10 {
 		titleW = 10
 	}
@@ -207,13 +333,65 @@ func (m *appModel) layout() {
 		{Title: "Novidade", Width: titleW},
 		{Title: "Quando", Width: ageW},
 	})
-	m.tbl.SetWidth(innerW)
+	m.tbl.SetWidth(m.listInnerWidth)
+	m.tbl.SetHeight(m.listRowsHeight)
+}
 
-	bodyHeight := m.height - headerLines - footerLines - boxOverhead
-	if bodyHeight < 3 {
-		bodyHeight = 3
+// computeMetaLines builds the metadata panel lines for the current item.
+func (m *appModel) computeMetaLines() []string {
+	item := m.current()
+	if item == nil {
+		return []string{theme.Dim().Render("nenhum item selecionado")}
 	}
-	m.tbl.SetHeight(bodyHeight)
+	lines := []string{
+		"fonte: " + item.Source,
+		"quando: " + item.CreatedAt.Format("2006-01-02 15:04"),
+	}
+	if item.SeenAt == nil {
+		lines = append(lines, "status: não visto")
+	} else {
+		lines = append(lines, "status: visto")
+	}
+	if item.Link != "" {
+		lines = append(lines, "link: "+item.Link)
+	}
+	return lines
+}
+
+// renderListPanel wraps the table in a bordered panel with focus highlight.
+func (m *appModel) renderListPanel() string {
+	return theme.Panel(m.focus == focusList).Render(m.tbl.View())
+}
+
+// renderMetaPanel renders the metadata panel (source, timestamp, status, link).
+func (m *appModel) renderMetaPanel() string {
+	title := theme.Title().Render("metadados")
+	lines := m.computeMetaLines()
+	body := strings.Join(lines, "\n")
+	body = tuiui.WrapText(body, m.rightInnerWidth)
+	content := title + "\n" + tuiui.PadToHeight(body, m.metaLines)
+	content = tuiui.PadLines(content, m.rightInnerWidth)
+	return theme.Panel(false).Render(content)
+}
+
+// renderDescPanel renders the scrollable markdown description panel.
+func (m *appModel) renderDescPanel() string {
+	m.descVP.Focus(m.focus == focusDesc)
+
+	item := m.current()
+	m.descVP.SetTitle("descrição")
+
+	if item == nil {
+		m.descVP.SetMarkdown("", m.rightInnerWidth, theme)
+		return m.descVP.View(theme, m.rightInnerWidth+4)
+	}
+
+	body := item.Body
+	if body == "" {
+		body = "sem descrição — o remetente só mandou o título"
+	}
+	m.descVP.SetMarkdown(body, m.rightInnerWidth, theme)
+	return m.descVP.View(theme, m.rightInnerWidth+4)
 }
 
 func (m appModel) Init() tea.Cmd { return nil }
@@ -239,6 +417,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.forwardToTable(msg)
 	}
 
+	// Global keys work regardless of focus.
 	switch {
 	case key.Matches(keyMsg, resolve("quit")):
 		return m, tea.Quit
@@ -268,12 +447,38 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Focus switching: ctrl+h → list, ctrl+l → desc.
+	if key.Matches(keyMsg, resolve("focus")) {
+		focusKeys := resolve("focus").Keys()
+		switch {
+		case len(focusKeys) > 0 && keyMsg.String() == focusKeys[0]:
+			m.focus = focusList
+		case len(focusKeys) > 1 && keyMsg.String() == focusKeys[1]:
+			if m.threePanel {
+				m.focus = focusDesc
+			}
+		}
+		return m, nil
+	}
+
+	// When desc is focused, j/k/scroll go to the viewport.
+	if m.focus == focusDesc && m.threePanel {
+		if m.descVP.Viewport().Update(keyMsg) {
+			return m, nil
+		}
+		return m, nil
+	}
+
 	return m.forwardToTable(msg)
 }
 
 func (m appModel) forwardToTable(msg tea.Msg) (tea.Model, tea.Cmd) {
+	prevCursor := m.tbl.Cursor()
 	var cmd tea.Cmd
 	m.tbl, cmd = m.tbl.Update(msg)
+	if m.tbl.Cursor() != prevCursor {
+		m.descVP.Viewport().Reset()
+	}
 	return m, cmd
 }
 
@@ -320,6 +525,12 @@ func (m appModel) View() string {
 		body = theme.Panel(true).Render(tuiui.PadLines(
 			theme.Dim().Render("nenhuma novidade ainda — outras ferramentas registram itens via `tarecap ipc item.add`"), m.width-4,
 		))
+	} else if m.threePanel {
+		listBox := m.renderListPanel()
+		metaBox := m.renderMetaPanel()
+		descBox := m.renderDescPanel()
+		rightCol := lipgloss.JoinVertical(lipgloss.Left, metaBox, descBox)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, listBox, strings.Repeat(" ", panelGap), rightCol)
 	} else {
 		body = theme.Panel(true).Render(m.tbl.View())
 	}

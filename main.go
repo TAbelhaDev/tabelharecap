@@ -12,6 +12,8 @@ func main() {
 		switch os.Args[1] {
 		case "ipc":
 			os.Exit(runIPC(os.Args[2:]))
+		case "notify":
+			os.Exit(runNotify())
 		}
 	}
 

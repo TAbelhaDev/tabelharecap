@@ -169,6 +169,104 @@ func (s *Store) sources() ([]string, error) {
 	return out, rows.Err()
 }
 
+// listSince returns items with id > minID, ordered by id ASC (newest first
+// within the new items). Used by the notify poller to find items created
+// since the last alert.
+func (s *Store) listSince(minID int64) ([]Item, error) {
+	q := `SELECT id, source, title, body, link, created_at, seen_at FROM items WHERE id > ? ORDER BY id ASC`
+	rows, err := s.db.Query(q, minID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Item
+	for rows.Next() {
+		item, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// maxID returns the highest item ID in the table (0 if empty). Used by the
+// notify poller to set the initial baseline without alerting.
+func (s *Store) maxID() (int64, error) {
+	var id sql.NullInt64
+	err := s.db.QueryRow(`SELECT MAX(id) FROM items`).Scan(&id)
+	if err != nil {
+		return 0, err
+	}
+	if !id.Valid {
+		return 0, nil
+	}
+	return id.Int64, nil
+}
+
+// existsSourceTitle reports whether an item with the given source and title
+// already exists. Used by item.add-batch for idempotent inserts.
+func (s *Store) existsSourceTitle(source, title string) (bool, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM items WHERE source = ? AND title = ?`, source, title).Scan(&n)
+	return n > 0, err
+}
+
+// addBatch inserts multiple items in a single transaction, skipping any
+// (source, title) pair that already exists.
+func (s *Store) addBatch(source string, items []batchItem) ([]Item, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`INSERT INTO items (source, title, body, link) VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+
+	var out []Item
+	for _, it := range items {
+		// Idempotency: skip if (source, title) already exists.
+		var n int
+		_ = tx.QueryRow(`SELECT COUNT(*) FROM items WHERE source = ? AND title = ?`, source, it.Title).Scan(&n)
+		if n > 0 {
+			continue
+		}
+
+		res, err := stmt.Exec(source, it.Title, nullIfEmpty(it.Body), nullIfEmpty(it.Link))
+		if err != nil {
+			return nil, err
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return nil, err
+		}
+		item, err := txGet(tx, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+
+	return out, tx.Commit()
+}
+
+// batchItem is the wire format for a single item in item.add-batch.
+type batchItem struct {
+	Title string `json:"title"`
+	Body  string `json:"body,omitempty"`
+	Link  string `json:"link,omitempty"`
+}
+
+// txGet fetches an item by ID within a transaction.
+func txGet(tx *sql.Tx, id int64) (Item, error) {
+	row := tx.QueryRow(`SELECT id, source, title, body, link, created_at, seen_at FROM items WHERE id = ?`, id)
+	return scanItem(row)
+}
+
 type scannable interface {
 	Scan(dest ...any) error
 }

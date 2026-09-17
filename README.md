@@ -66,11 +66,15 @@ go build -o tarecap .
 
 ## Usage
 
-Running `tarecap` with no arguments opens the TUI: a single feed, newest
-item first, with a `●`/`○` marker for unseen/seen. Keys:
+Running `tarecap` with no arguments opens the TUI: a three-panel layout
+(wide terminals) with a chronological feed on the left, metadata on the
+top-right, and a scrollable markdown description on the bottom-right. A
+`●`/`○` marker indicates unseen/seen items. On narrow terminals it falls
+back to the single-panel table. Keys:
 
 | Key | Action |
 | --- | --- |
+| `ctrl+h` / `ctrl+l` | switch focus between the list and description panels |
 | `enter` / `s` | mark the selected item as seen |
 | `A` | mark every item as seen |
 | `u` | toggle "unseen only" |

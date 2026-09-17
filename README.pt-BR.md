@@ -65,11 +65,15 @@ go build -o tarecap .
 
 ## Uso
 
-Rodar `tarecap` sem argumentos abre o TUI: um feed único, mais recente
-primeiro, com um marcador `●`/`○` pra não-visto/visto. Teclas:
+Rodar `tarecap` sem argumentos abre o TUI: layout de 3 painéis (terminais
+largos) com um feed cronológico à esquerda, metadados no topo-direita e uma
+descrição em markdown rolagem na base-direita. Um marcador `●`/`○` indica
+itens não vistos/vistos. Em terminais estreitos, volta ao painel único de
+tabela. Teclas:
 
 | Tecla | Ação |
 | --- | --- |
+| `ctrl+h` / `ctrl+l` | alternar foco entre os painéis de lista e descrição |
 | `enter` / `s` | marca o item selecionado como visto |
 | `A` | marca todos os itens como vistos |
 | `u` | alterna "só não vistos" |

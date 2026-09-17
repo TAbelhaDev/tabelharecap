@@ -24,6 +24,7 @@ func init() {
 		tuiui.Action{ID: "toggle_unseen", Help: "só não vistos", Keys: []string{"u"}},
 		tuiui.Action{ID: "cycle_source", Help: "filtrar por fonte", Keys: []string{"f"}},
 		tuiui.Action{ID: "nav", Help: "mover cursor", Keys: []string{"j", "k", "up", "down"}, Label: "j/k"},
+		tuiui.Action{ID: "focus", Help: "alternar foco", Keys: []string{"ctrl+h", "ctrl+l"}, Label: "ctrl+h/l"},
 	)
 }
 
