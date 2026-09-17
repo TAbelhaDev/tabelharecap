@@ -38,7 +38,7 @@ jobs:
         run: |
           mkdir -p dist
           BIN="tarecap-${{ matrix.goos }}-${{ matrix.goarch }}"
-          go build -o "dist/$BIN" .
+          go build -o "dist/$BIN" ./cmd/tarecap
           tar -C dist -czf "dist/$BIN.tar.gz" "$BIN"
 
       - name: Upload build artifact

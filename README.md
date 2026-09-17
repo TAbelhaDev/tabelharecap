@@ -51,17 +51,26 @@ my Bubble Tea TUIs.
 Requires Go 1.26+.
 
 ```bash
-go install github.com/TAbelhaDev/tabelharecap@latest
+go install github.com/TAbelhaDev/tabelharecap/cmd/tarecap@latest
 ```
 
-That installs the binary as `tabelharecap` (matching the module name). To get
-the short `tarecap` name used throughout this README, build from source
-instead:
+Or build from source:
 
 ```bash
 git clone https://github.com/TAbelhaDev/tabelharecap.git
 cd tabelharecap
-go build -o tarecap .
+go build -o tarecap ./cmd/tarecap
+```
+
+### Local development
+
+A `post-commit` hook in `.githooks/` rebuilds and reinstalls `tarecap` to
+`~/.local/bin/tarecap` after every commit, so the local command never goes
+stale. Git doesn't enable a repo's `.githooks/` automatically on clone — run
+this once per clone:
+
+```bash
+git config core.hooksPath .githooks
 ```
 
 ## Usage
